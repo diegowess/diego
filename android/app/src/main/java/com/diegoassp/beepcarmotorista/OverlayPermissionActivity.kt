@@ -11,17 +11,28 @@ import androidx.appcompat.app.AppCompatActivity
 class OverlayPermissionActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContentView(R.layout.activity_overlay_permission)
+    try {
+      setContentView(R.layout.activity_overlay_permission)
 
-    val btnCancel = findViewById<Button>(R.id.btnCancel)
-    val btnAllow = findViewById<Button>(R.id.btnAllow)
+      val btnCancel = findViewById<Button>(R.id.btnCancel)
+      val btnAllow = findViewById<Button>(R.id.btnAllow)
 
-    btnCancel.setOnClickListener {
-      finish()
-    }
+      btnCancel?.setOnClickListener {
+        finish()
+      }
 
-    btnAllow.setOnClickListener {
-      openOverlaySettings()
+      btnAllow?.setOnClickListener {
+        try {
+          openOverlaySettings()
+        } catch (e: Exception) {
+          // Se falhar, apenas fecha a activity
+          e.printStackTrace()
+        } finally {
+          finish()
+        }
+      }
+    } catch (e: Exception) {
+      e.printStackTrace()
       finish()
     }
   }
@@ -29,10 +40,25 @@ class OverlayPermissionActivity : AppCompatActivity() {
   private fun openOverlaySettings() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
 
-    val intent = Intent(
-      Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-      Uri.parse("package:$packageName")
-    )
-    startActivity(intent)
+    try {
+      val intent = Intent(
+        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        Uri.parse("package:$packageName")
+      ).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      startActivity(intent)
+    } catch (e: Exception) {
+      e.printStackTrace()
+      // Tenta abrir configurações gerais como fallback
+      try {
+        val intent = Intent(Settings.ACTION_SETTINGS).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+      } catch (e2: Exception) {
+        e2.printStackTrace()
+      }
+    }
   }
 }

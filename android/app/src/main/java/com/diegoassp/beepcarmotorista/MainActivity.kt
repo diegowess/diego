@@ -1,6 +1,8 @@
 package com.diegoassp.beepcarmotorista
 import expo.modules.splashscreen.SplashScreenManager
 
+import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 
@@ -12,6 +14,8 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  private var hasBeenStarted = false
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
@@ -25,8 +29,9 @@ class MainActivity : ReactActivity() {
 
   override fun onStart() {
     super.onStart()
+    hasBeenStarted = true // Marca que o app já foi iniciado
     try {
-      val prefs = getSharedPreferences("driver_foreground_service", MODE_PRIVATE)
+      val prefs = getSharedPreferences("driver_foreground_service", Context.MODE_PRIVATE)
       val isOnline = prefs.getBoolean("driver_online", false)
       if (isOnline) {
         startService(Intent(this, DriverForegroundService::class.java).apply {
@@ -39,8 +44,12 @@ class MainActivity : ReactActivity() {
 
   override fun onStop() {
     super.onStop()
+    // Só mostra a bolha se o app já foi iniciado antes (não no primeiro carregamento)
+    if (!hasBeenStarted) {
+      return
+    }
     try {
-      val prefs = getSharedPreferences("driver_foreground_service", MODE_PRIVATE)
+      val prefs = getSharedPreferences("driver_foreground_service", Context.MODE_PRIVATE)
       val isOnline = prefs.getBoolean("driver_online", false)
       if (isOnline) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {

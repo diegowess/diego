@@ -37,9 +37,13 @@ public class FloatingBubbleService extends Service {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
+        // Converter 100dp para pixels
+        float density = getResources().getDisplayMetrics().density;
+        int sizeInPixels = (int) (100 * density);
+        
         params = new WindowManager.LayoutParams(
-                120, // width
-                120, // height
+                sizeInPixels, // width (80dp convertido para pixels)
+                sizeInPixels, // height (80dp convertido para pixels)
                 layoutFlag,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                 WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH |

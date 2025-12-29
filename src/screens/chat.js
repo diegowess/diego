@@ -1,21 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuthStore } from '../store/useAuthStore';
 
 // Configurações da API
 const API_BASE_URL = 'https://beepapps.cloud/apppassageiro';
@@ -67,19 +68,19 @@ export default function Chat({ route, navigation }) {
     'Obrigado!'
   ];
 
-  // Carregar foto do usuário do AsyncStorage
+  // Carregar foto do usuário do store
+  const { user } = useAuthStore();
+  
   useEffect(() => {
     const loadUserPhoto = async () => {
       try {
-        const storedUser = await AsyncStorage.getItem('user_data');
-        if (storedUser) {
-          const parsed = JSON.parse(storedUser);
-          if (parsed?.foto) {
-            setUserPhoto(parsed.foto);
-            console.log('Foto do usuário carregada no chat:', parsed.foto);
-          } else {
-            console.log('Usuário sem foto, usando fallback.');
-          }
+        // Usar user do store ou carregar do AsyncStorage como fallback
+        const userData = user || await useAuthStore.getState().loadUser();
+        if (userData?.foto) {
+          setUserPhoto(userData.foto);
+          console.log('Foto do usuário carregada no chat:', userData.foto);
+        } else {
+          console.log('Usuário sem foto, usando fallback.');
         }
       } catch (e) {
         console.log('Erro ao carregar foto do usuário:', e);
@@ -251,8 +252,8 @@ if (data.success) {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar barStyle="light-content" backgroundColor="#fff" />
       
       {/* Botão voltar flutuante */}
       <TouchableOpacity 
@@ -340,7 +341,7 @@ if (data.success) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -351,7 +352,7 @@ const styles = StyleSheet.create({
   },
   floatingBackButton: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 50 : 30,
+    top: Platform.OS === 'ios' ? 10 : 10,
     left: 20,
     backgroundColor: '#fff',
     width: 44,

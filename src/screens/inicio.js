@@ -2,758 +2,99 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
+import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
-import * as TaskManager from 'expo-task-manager';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    Alert,
-    Animated,
-    AppState,
-    Dimensions,
-    Easing,
-    Modal,
-    NativeModules,
-    PanResponder,
-    Platform,
-    StatusBar,
-    StyleSheet,
-    Text,
-    ToastAndroid,
-    TouchableOpacity,
-    View
+  Alert,
+  Animated,
+  AppState,
+  Dimensions,
+  Easing,
+  Modal,
+  NativeModules,
+  PanResponder,
+  Platform,
+  StatusBar,
+  StyleSheet,
+  Text,
+  ToastAndroid,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+
+// Hooks
+import { useLocationTracker } from '../hooks/useLocationTracker';
+import { useWebSocket } from '../hooks/useWebSocket';
+
+// Serviços
+import { aceitarCorrida, carregarGanhos, recusarCorrida } from '../services/apiService';
+import { startBackgroundLocationTracking, stopBackgroundLocationTracking } from '../services/locationService';
+
+// Constantes
+import { API_ACAO_CORRIDA, WS_CORRIDAS_URL, WS_LOCALIZACAO_URL } from '../constants/api';
+import { uberMapStyle } from '../constants/mapStyles';
+
+// Utils
+import { formatDistanciaCorrida, formatTempoCorrida, formatValorCorrida, getPassengerName, getPassengerRating } from '../utils/rideFormatters';
+
+// Stores
+import { useAppStore } from '../store/useAppStore';
+import { useAuthStore } from '../store/useAuthStore';
 
 import AreasDinamicasMapa from './AreasDinamicasMapa';
 import CarteiraScreen from './CarteiraScreen';
 import GanhosScreen from './GanhosScreen';
 
-const { width, height } = Dimensions.get('window');
-
-// Nome da tarefa de background
-const LOCATION_TRACKING_TASK = 'background-location-tracking';
-
-// Configurações WebSocket
-const WS_LOCALIZACAO_URL = 'wss://beepapps.cloud/ws1';
-const WS_CORRIDAS_URL    = 'wss://beepapps.cloud/ws2';
-
-// API de ação de corrida
-const API_ACAO_CORRIDA = 'https://beepapps.cloud/appmotorista/api_acao_corrida.php';
-const API_BASE_URL = 'https://beepapps.cloud/appmotorista';
-
-const { DriverForegroundService } = NativeModules || {};
-
-const WS_CONFIG = {
-  RECONNECT_DELAY: 3000,
-  PING_INTERVAL: 30000,
-  PING_TIMEOUT: 10000,
-  MAX_RECONNECT_ATTEMPTS: 10
-};
-
-const uberMapStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#f5f5f5' }] },
-  { elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#616161' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#f5f5f5' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#eeeeee' }] },
-  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#757575' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#e5e5e5' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road.arterial', elementType: 'labels.text.fill', stylers: [{ color: '#757575' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#dadada' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#616161' }] },
-  { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#e5e5e5' }] },
-  { featureType: 'transit.station', elementType: 'labels.text.fill', stylers: [{ color: '#757575' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] }
+// Constante de mensagens de busca
+const SEARCHING_MESSAGES = [
+  'Buscando Corrida que encaixa no seu perfil...',
+  'Sincronizando localização...',
+  'Aguardando novas chamadas próximas...'
 ];
 
-// Hook para WebSocket Genérico
-const useWebSocket = (url) => {
-  const wsRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
-  const pingIntervalRef = useRef(null);
-  const reconnectAttemptsRef = useRef(0);
-  const isConnectingRef = useRef(false);
-  const messageHandlersRef = useRef(new Map());
+const { width, height } = Dimensions.get('window');
+const { DriverForegroundService } = NativeModules || {};
 
-  const addMessageHandler = useCallback((type, handler) => {
-    messageHandlersRef.current.set(type, handler);
-    
-  }, [url]);
-
-  const removeMessageHandler = useCallback((type) => {
-    messageHandlersRef.current.delete(type);
-    
-  }, [url]);
-
-  const connect = useCallback(() => {
-    if (isConnectingRef.current || (wsRef.current?.readyState === WebSocket.OPEN)) {
-      
-      return;
-    }
-
-    isConnectingRef.current = true;
-    
-    if (wsRef.current) {
-      try {
-        wsRef.current.close();
-      } catch (e) {
-        console.warn(`Erro ao fechar conexão anterior (${url}):`, e);
-      }
-      wsRef.current = null;
-    }
-
-    try {
-      console.log(`🔗 Conectando ao WebSocket (${url})...`);
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log(`✅ WebSocket conectado! (${url})`);
-        isConnectingRef.current = false;
-        reconnectAttemptsRef.current = 0;
-
-        if (pingIntervalRef.current) {
-          clearInterval(pingIntervalRef.current);
-        }
-        
-        pingIntervalRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            try {
-              ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
-            } catch (error) {
-              console.error(`Erro ao enviar ping (${url}):`, error);
-            }
-          }
-        }, WS_CONFIG.PING_INTERVAL);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const dataStr = event.data.toString();
-          
-          // Verificar se é HTML/erro HTTP
-          if (dataStr.trim().startsWith('<!DOCTYPE') || 
-              dataStr.includes('<html>') ||
-              dataStr.includes('<head>') ||
-              dataStr.includes('HTTP/1.1') ||
-              dataStr.includes('Error') ||
-              dataStr.trim().startsWith('<')) {
-            
-            console.warn(`⚠️ Servidor retornou HTML/Erro HTTP (${url}):`, dataStr.substring(0, 200));
-            
-            // Tentar reconectar após erro HTTP
-            if (reconnectAttemptsRef.current < WS_CONFIG.MAX_RECONNECT_ATTEMPTS) {
-              setTimeout(() => {
-                console.log(`🔄 Reconectando após erro HTTP (${url})...`);
-                connect();
-              }, WS_CONFIG.RECONNECT_DELAY);
-            }
-            return;
-          }
-          
-          // Tentar parse JSON
-          try {
-            const data = JSON.parse(dataStr);
-            
-            // DEBUG: Log mensagens recebidas
-            if (data.type === 'nova_corrida') {
-              console.log('🚗 NOVA CORRIDA RECEBIDA VIA WEBSOCKET:', {
-                id: data.corrida?.id,
-                ref: data.corrida?.ref,
-                motoristaId: data.corrida?.motorista_id,
-                valor: data.corrida?.valor,
-                api_endpoint: data.api_endpoint
-              });
-            }
-
-            let messageType = data.type;
-            if (!messageType) {
-              if (
-                Array.isArray(data.corridas) ||
-                data.total_corridas !== undefined ||
-                data.corridas_pendentes !== undefined
-              ) {
-                messageType = 'corridas_list';
-              } else if (data.success !== undefined) {
-                messageType = 'response';
-              }
-            }
-
-            if (messageType) {
-              const handler = messageHandlersRef.current.get(messageType);
-              if (handler) {
-                try {
-                  handler(data);
-                } catch (error) {
-                  console.error(`Erro no handler ${messageType} (${url}):`, error);
-                }
-              } else {
-                console.log(`📨 Mensagem sem handler (${url}):`, messageType);
-              }
-            } else {
-              console.log(`📨 Mensagem recebida sem type (${url})`);
-            }
-
-            if (data.type === 'pong') {
-              console.log(`🏓 Pong recebido (${url})`);
-            }
-          } catch (parseError) {
-            console.error(`❌ Erro ao fazer parse JSON (${url}):`, parseError.message);
-            console.warn('Conteúdo recebido:', dataStr.substring(0, 500));
-          }
-        } catch (error) {
-          console.error(`❌ Erro geral ao processar mensagem (${url}):`, error.message);
-        }
-      };
-
-      ws.onclose = (event) => {
-        console.log(`⚠️ WebSocket desconectado (${url}). Código: ${event.code}, Razão: ${event.reason}`);
-        isConnectingRef.current = false;
-        
-        if (pingIntervalRef.current) {
-          clearInterval(pingIntervalRef.current);
-          pingIntervalRef.current = null;
-        }
-        
-        if (reconnectAttemptsRef.current < WS_CONFIG.MAX_RECONNECT_ATTEMPTS) {
-          reconnectAttemptsRef.current++;
-          console.log(`🔄 Reconectando (${url}) (${reconnectAttemptsRef.current}/${WS_CONFIG.MAX_RECONNECT_ATTEMPTS})...`);
-          
-          reconnectTimeoutRef.current = setTimeout(() => {
-            connect();
-          }, WS_CONFIG.RECONNECT_DELAY * reconnectAttemptsRef.current);
-        } else {
-          console.log(`❌ Máximo de tentativas de reconexão (${url})`);
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error(`❌ Erro WebSocket (${url}):`, error.message);
-        isConnectingRef.current = false;
-      };
-
-    } catch (error) {
-      console.error(`❌ Erro ao criar conexão (${url}):`, error);
-      isConnectingRef.current = false;
-    }
-  }, [url]);
-
-  const send = useCallback((data) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        const message = JSON.stringify(data);
-        wsRef.current.send(message);
-        
-        // DEBUG: Log mensagens enviadas importantes
-        if (data.type === 'aceitar_corrida' || data.type === 'recusar_corrida') {
-          console.log(`📤 Enviado (${url}):`, { type: data.type, corrida_id: data.corrida_id });
-        }
-        
-        return true;
-      } catch (error) {
-        console.error(`❌ Erro ao enviar (${url}):`, error);
-        return false;
-      }
-    } else {
-      console.warn(`⚠️ WebSocket não conectado (${url}), estado:`, wsRef.current?.readyState);
-      return false;
-    }
-  }, [url]);
-
-  const disconnect = useCallback(() => {
-    console.log(`🔌 Desconectando WebSocket (${url})`);
-    
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    
-    if (pingIntervalRef.current) {
-      clearInterval(pingIntervalRef.current);
-      pingIntervalRef.current = null;
-    }
-    
-    if (wsRef.current) {
-      try {
-        wsRef.current.close();
-      } catch (e) {
-        console.warn(`Erro ao fechar WebSocket (${url}):`, e);
-      }
-      wsRef.current = null;
-    }
-    
-    reconnectAttemptsRef.current = 0;
-    isConnectingRef.current = false;
-    messageHandlersRef.current.clear();
-  }, [url]);
-
-  const isConnected = useCallback(() => {
-    return wsRef.current?.readyState === WebSocket.OPEN;
-  }, []);
-
-  const getConnectionState = useCallback(() => {
-    if (!wsRef.current) return 'disconnected';
-    
-    switch (wsRef.current.readyState) {
-      case WebSocket.CONNECTING:
-        return 'connecting';
-      case WebSocket.OPEN:
-        return 'connected';
-      case WebSocket.CLOSING:
-        return 'closing';
-      case WebSocket.CLOSED:
-        return 'disconnected';
-      default:
-        return 'unknown';
-    }
-  }, []);
-
-  return {
-    connect,
-    disconnect,
-    send,
-    isConnected,
-    getConnectionState,
-    addMessageHandler,
-    removeMessageHandler,
-    wsRef
-  };
-};
-
-// Funções para background tracking
-const startBackgroundLocationTracking = async () => {
-  try {
-    const isTaskRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK);
-    
-    if (!isTaskRegistered) {
-      await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
-        accuracy: Location.Accuracy.Balanced,
-        distanceInterval: 50,
-        timeInterval: 10000,
-        showsBackgroundLocationIndicator: true,
-        foregroundService: {
-          notificationTitle: 'Localização ativa',
-          notificationBody: 'O aplicativo está rastreando sua localização',
-          notificationColor: '#000000',
-        },
-      });
-      
-      console.log('✅ Background tracking iniciado');
-    }
-  } catch (error) {
-    console.error('❌ Erro ao iniciar background tracking:', error);
-  }
-};
-
-const stopBackgroundLocationTracking = async () => {
-  try {
-    const isTaskRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TRACKING_TASK);
-    
-    if (isTaskRegistered) {
-      await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-      console.log('✅ Background tracking parado');
-    }
-  } catch (error) {
-    console.error('❌ Erro ao parar background tracking:', error);
-  }
-};
-
-// Hook para rastreamento de localização otimizado
-const useLocationTracker = (motoristaId, online, sendLocalizacao) => {
-  const [location, setLocation] = useState(null);
-  const [heading, setHeading] = useState(0);
-  const locationSubscriptionRef = useRef(null);
-  const headingSubscriptionRef = useRef(null);
-  const lastLocationUpdateRef = useRef(0);
-  const lastSignificantLocationRef = useRef(null);
-
-  const calcularDistancia = (lat1, lon1, lat2, lon2) => {
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI/180;
-    const φ2 = lat2 * Math.PI/180;
-    const Δφ = (lat2-lat1) * Math.PI/180;
-    const Δλ = (lon2-lon1) * Math.PI/180;
-
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
-    return R * c;
-  };
-
-  const atualizarLocalizacaoNoServidor = useCallback((latitude, longitude, rotacao = 0) => {
-    if (!sendLocalizacao || !motoristaId || !online) {
-      console.log('⚠️ Não pode atualizar localização:', { motoristaId, online });
-      return false;
-    }
-    
-    const now = Date.now();
-    
-    // Rate limiting: máximo uma atualização a cada 3 segundos
-    if (now - lastLocationUpdateRef.current < 3000) {
-      return true;
-    }
-    
-    // Verificar se a mudança é significativa (mais de 20 metros)
-    if (lastSignificantLocationRef.current) {
-      const distance = calcularDistancia(
-        lastSignificantLocationRef.current.latitude,
-        lastSignificantLocationRef.current.longitude,
-        latitude,
-        longitude
-      );
-      
-      if (distance < 20) {
-        // Atualização não significativa, apenas atualizar timestamp
-        lastSignificantLocationRef.current.timestamp = now;
-        return true;
-      }
-    }
-    
-    // Atualizar localização no servidor (APENAS localização)
-    const sent = sendLocalizacao({
-      type: 'atualizar_localizacao',
-      motorista_id: motoristaId,
-      latitude: latitude,
-      longitude: longitude,
-      rotacao: rotacao,
-      timestamp: now
-    });
-    
-    if (sent) {
-      lastLocationUpdateRef.current = now;
-      lastSignificantLocationRef.current = {
-        latitude,
-        longitude,
-        timestamp: now
-      };
-      
-      // DEBUG
-      console.log('📍 Localização atualizada no servidor:', { 
-        latitude: latitude.toFixed(6), 
-        longitude: longitude.toFixed(6),
-        motoristaId 
-      });
-    } else {
-      console.warn('⚠️ Falha ao enviar localização para servidor');
-    }
-    
-    return sent;
-  }, [sendLocalizacao, motoristaId, online]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const startLocationTracking = async () => {
-      if (!online || !motoristaId) {
-        console.log('⚠️ Location tracking não iniciado:', { online, motoristaId });
-        return;
-      }
-
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          console.log('Permissão de localização negada');
-          return;
-        }
-
-        // Parar subscriptions existentes
-        if (locationSubscriptionRef.current) {
-          locationSubscriptionRef.current.remove();
-        }
-        if (headingSubscriptionRef.current) {
-          headingSubscriptionRef.current.remove();
-        }
-
-        console.log('📍 Iniciando rastreamento de localização');
-
-        // Configurar atualização de localização otimizada
-        locationSubscriptionRef.current = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            distanceInterval: 30,
-            timeInterval: 5000,
-          },
-          (newLocation) => {
-            if (isMounted && newLocation?.coords) {
-              const { latitude, longitude } = newLocation.coords;
-              
-              setLocation({ latitude, longitude });
-              atualizarLocalizacaoNoServidor(latitude, longitude, heading);
-            }
-          }
-        );
-
-        // Configurar bússola
-        headingSubscriptionRef.current = await Location.watchHeadingAsync(
-          (newHeading) => {
-            if (isMounted && newHeading) {
-              const trueHeading = newHeading.trueHeading !== undefined ? 
-                                newHeading.trueHeading : 
-                                newHeading.magHeading || 0;
-              
-              setHeading(trueHeading);
-            }
-          }
-        );
-
-      } catch (error) {
-        console.error('Erro ao iniciar rastreamento:', error);
-      }
-    };
-
-    const stopLocationTracking = () => {
-      if (locationSubscriptionRef.current) {
-        locationSubscriptionRef.current.remove();
-        locationSubscriptionRef.current = null;
-      }
-      if (headingSubscriptionRef.current) {
-        headingSubscriptionRef.current.remove();
-        headingSubscriptionRef.current = null;
-      }
-      setLocation(null);
-      setHeading(0);
-      lastLocationUpdateRef.current = 0;
-      lastSignificantLocationRef.current = null;
-    };
-
-    if (online && motoristaId) {
-      startLocationTracking();
-    } else {
-      stopLocationTracking();
-    }
-
-    return () => {
-      isMounted = false;
-      stopLocationTracking();
-    };
-  }, [online, motoristaId, heading, atualizarLocalizacaoNoServidor]);
-
-  return { location, heading };
-};
-
-// Funções auxiliares para formatação
-const extractCoord = (v) => {
-  if (v == null) return null;
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  const n = parseFloat(String(v).replace(/[^0-9\.,-]/g, '').replace(',', '.'));
-  return Number.isFinite(n) ? n : null;
-};
-
-const computeDistanceKm = (c) => {
-  const o = c?.origem || {};
-  const d = c?.destino || {};
-  
-  const lat1 = extractCoord(o.latitude) ?? extractCoord(o.lat) ?? 
-               extractCoord(c.origem_latitude) ?? extractCoord(c.origem_lat) ?? 
-               extractCoord(c.origemLat) ?? extractCoord(c.origem_lat);
-  
-  const lon1 = extractCoord(o.longitude) ?? extractCoord(o.lng) ?? 
-               extractCoord(o.lon) ?? extractCoord(c.origem_longitude) ?? 
-               extractCoord(c.origem_lng) ?? extractCoord(c.origemLon);
-  
-  const lat2 = extractCoord(d.latitude) ?? extractCoord(d.lat) ?? 
-               extractCoord(c.destino_latitude) ?? extractCoord(c.destino_lat) ?? 
-               extractCoord(c.destinoLat);
-  
-  const lon2 = extractCoord(d.longitude) ?? extractCoord(d.lng) ?? 
-               extractCoord(d.lon) ?? extractCoord(c.destino_longitude) ?? 
-               extractCoord(c.destino_lng) ?? extractCoord(c.destinoLon);
-  
-  if ([lat1, lon1, lat2, lon2].some((v) => v == null)) return null;
-  
-  const toRad = (x) => x * Math.PI / 180;
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + 
-            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const cang = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const dist = R * cang;
-  return Number.isFinite(dist) ? dist : null;
-};
-
-const formatValorCorrida = (corrida) => {
-  if (!corrida) return 'R$ 0,00';
-  
-  const candidate = corrida?.valor || 
-                    corrida?.valor_corrida || 
-                    corrida?.preco || 
-                    corrida?.price || 
-                    corrida?.tarifa || 
-                    corrida?.total || 
-                    corrida?.total_valor ||
-                    corrida?.valor_total;
-  
-  if (typeof candidate === 'number') {
-    return `R$ ${candidate.toFixed(2).replace('.', ',')}`;
-  }
-  
-  if (typeof candidate === 'string') {
-    const normalized = candidate.replace(/[^\d,\.-]/g, '').replace(',', '.');
-    const val = parseFloat(normalized);
-    if (!isNaN(val)) {
-      return `R$ ${val.toFixed(2).replace('.', ',')}`;
-    }
-  }
-  
-  const distKm = computeDistanceKm(corrida);
-  if (distKm !== null) {
-    const estimate = 5.50 + (distKm * 2.50);
-    return `R$ ${estimate.toFixed(2).replace('.', ',')}`;
-  }
-  
-  return 'R$ 0,00';
-};
-
-const formatDistanciaCorrida = (corrida) => {
-  if (!corrida) return '0,0 km';
-  
-  const candidate = corrida?.distancia_km || 
-                    corrida?.distancia || 
-                    corrida?.km || 
-                    corrida?.distance || 
-                    corrida?.dist ||
-                    corrida?.distancia_total;
-  
-  if (typeof candidate === 'number') {
-    const km = candidate > 100 ? candidate / 1000 : candidate;
-    return `${km.toFixed(1).replace('.', ',')} km`;
-  }
-  
-  if (typeof candidate === 'string') {
-    const normalized = candidate.toLowerCase();
-    if (normalized.includes('km')) return candidate;
-    
-    const val = parseFloat(normalized.replace(/[^\d,\.]/g, '').replace(',', '.'));
-    if (!isNaN(val)) {
-      const km = val > 100 ? val / 1000 : val;
-      return `${km.toFixed(1).replace('.', ',')} km`;
-    }
-  }
-  
-  const distKm = computeDistanceKm(corrida);
-  if (distKm !== null) {
-    return `${distKm.toFixed(1).replace('.', ',')} km`;
-  }
-  
-  return '0,0 km';
-};
-
-const formatTempoCorrida = (corrida) => {
-  if (!corrida) return '0 min';
-  
-  const candidate = corrida?.tempo || 
-                    corrida?.tempo_estimado || 
-                    corrida?.duracao || 
-                    corrida?.duration || 
-                    corrida?.minutos ||
-                    corrida?.tempo_total;
-  
-  if (typeof candidate === 'number') {
-    return `${Math.round(candidate)} min`;
-  }
-  
-  if (typeof candidate === 'string') {
-    const normalized = candidate.toLowerCase();
-    if (normalized.includes('min')) return candidate;
-    
-    const val = parseFloat(normalized.replace(/[^\d,\.]/g, '').replace(',', '.'));
-    if (!isNaN(val)) {
-      return `${Math.round(val)} min`;
-    }
-  }
-  
-  const distKm = computeDistanceKm(corrida);
-  if (distKm !== null) {
-    const minutos = Math.max(1, Math.round(distKm * 4));
-    return `${minutos} min`;
-  }
-  
-  return '0 min';
-};
-
-// Função para extrair o nome do passageiro
-const getPassengerName = (corrida) => {
-  if (!corrida) return 'Novo Passageiro';
-  
-  const name = corrida?.passageiro?.nome || 
-               corrida?.passageiro_nome || 
-               corrida?.nome_passageiro || 
-               corrida?.nome || 
-               corrida?.cliente_nome ||
-               corrida?.user_name;
-  
-  if (name) {
-    return name.toString().split(' ').map(word => 
-      word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-    ).join(' ');
-  }
-  
-  return 'Novo Passageiro';
-};
-
-// Função para extrair rating do passageiro
-const getPassengerRating = (corrida) => {
-  if (!corrida) return '4.8';
-  
-  const rating = corrida?.passageiro?.rating || 
-                 corrida?.rating || 
-                 corrida?.passageiro_rating || 
-                 corrida?.cliente_rating;
-  
-  if (rating !== undefined && rating !== null) {
-    if (typeof rating === 'number') {
-      return rating.toFixed(1);
-    }
-    if (typeof rating === 'string') {
-      const num = parseFloat(rating);
-      if (!isNaN(num)) {
-        return num.toFixed(1);
-      }
-    }
-  }
-  
-  return '4.8';
-};
 
 // Componente principal
 export default function MainScreen({ route }) {
   const navigation = useNavigation();
   
-  // Estados
-  const [online, setOnline] = useState(false);
-  const [saldoDia, setSaldoDia] = useState(0);
+  // Stores
+  const { motoristaId, tipoVeiculo, loadUser } = useAuthStore();
+  const {
+    online,
+    setOnline,
+    saldoDia,
+    setSaldoDia,
+    corridaAtual,
+    setCorridaAtual,
+    temCorridaAtiva,
+    setTemCorridaAtiva,
+    localizacaoMotorista,
+    setLocalizacaoMotorista,
+    cidadeAtual,
+    setCidadeAtual,
+    wsLocalizacaoStatus,
+    setWsLocalizacaoStatus,
+    wsCorridasStatus,
+    setWsCorridasStatus,
+  } = useAppStore();
+  
+  // Estados locais
   const [saldoOculto, setSaldoOculto] = useState(false);
   const [ganhosModalVisivel, setGanhosModalVisivel] = useState(false);
   const [carteiraModalVisivel, setCarteiraModalVisivel] = useState(false);
   const [ganhosScreenModalVisivel, setGanhosScreenModalVisivel] = useState(false);
   const [modalCorrida, setModalCorrida] = useState(false);
-  const [corridaAtual, setCorridaAtual] = useState(null);
-  const [motoristaId, setMotoristaId] = useState(null);
-  const [tipoVeiculo, setTipoVeiculo] = useState(null);
-  const [temCorridaAtiva, setTemCorridaAtiva] = useState(false);
-  const [localizacaoMotorista, setLocalizacaoMotorista] = useState({
-    latitude: -5.195395088992599,
-    longitude: -39.280787173061384,
-    latitudeDelta: 0.015,
-    longitudeDelta: 0.0121,
-  });
-  const [cidadeAtual, setCidadeAtual] = useState(null);
   const [buscandoLocalizacao, setBuscandoLocalizacao] = useState(false);
   const [loadingOnline, setLoadingOnline] = useState(false);
   const [currentHeading, setCurrentHeading] = useState(0);
   const lastGeocodeKeyRef = useRef(null);
-  const [wsLocalizacaoStatus, setWsLocalizacaoStatus] = useState('disconnected');
-  const [wsCorridasStatus, setWsCorridasStatus] = useState('disconnected');
   const [debugInfo, setDebugInfo] = useState('');
   
   // Referências
@@ -844,12 +185,6 @@ export default function MainScreen({ route }) {
   const lastCorridasStatusAtRef = useRef(0);
   const lastLocalizacaoStatusAtRef = useRef(0);
   
-  // Mensagens de busca
-  const SEARCHING_MESSAGES = [
-    'Buscando Corrida que encaixa no seu perfil...',
-    'Sincronizando localização...',
-    'Aguardando novas chamadas próximas...'
-  ];
   const [searchingIndex, setSearchingIndex] = useState(0);
 
   const [snackbarState, setSnackbarState] = useState({ visible: false, message: '', kind: 'info' });
@@ -877,7 +212,7 @@ export default function MainScreen({ route }) {
     } catch (e) {}
   }, []);
 
-  const ensureOverlayPermission = async () => {
+  const ensureOverlayPermission = useCallback(async () => {
     if (Platform.OS !== 'android') return true;
     if (!DriverForegroundService) {
       showUiMessage('Erro: módulo DriverForegroundService não encontrado', 'error');
@@ -894,15 +229,52 @@ export default function MainScreen({ route }) {
       if (DriverForegroundService?.requestOverlayPermission) {
         Alert.alert(
           'Permissão necessária',
-          'Para exibir a bolha flutuante quando o app estiver minimizado (como Uber/99), permita "Exibir sobre outros apps".',
+          'Para exibir a bolha flutuante quando o app estiver minimizado (como Uber/99), você precisa permitir "Exibir sobre outros apps".\n\nApós conceder a permissão, volte ao app e tente novamente.',
           [
             { text: 'Agora não', style: 'cancel' },
             {
-              text: 'Continuar',
+              text: 'Abrir Configurações',
               onPress: () => {
-                DriverForegroundService.requestOverlayPermission().catch((err) => {
-                  console.log('Falha ao solicitar permissão de sobreposição:', err);
-                });
+                // Usar setTimeout para evitar problemas de sincronização
+                setTimeout(async () => {
+                  try {
+                    if (DriverForegroundService?.requestOverlayPermission) {
+                      await DriverForegroundService.requestOverlayPermission();
+                      console.log('✅ Tela de permissão aberta');
+                    } else {
+                      // Fallback direto se método não disponível
+                      await Linking.openSettings();
+                    }
+                  } catch (err) {
+                    console.error('❌ Erro ao abrir configurações:', err);
+                    // Fallback: tentar abrir manualmente
+                    try {
+                      await Linking.openSettings();
+                    } catch (_linkErr) {
+                      console.error('❌ Erro ao abrir configurações via Linking:', _linkErr);
+                      showUiMessage('Não foi possível abrir as configurações automaticamente. Vá manualmente em: Configurações > Apps > BeepCarMotorista > Exibir sobre outros apps', 'error');
+                    }
+                  }
+                }, 100);
+              },
+            },
+          ]
+        );
+      } else {
+        // Fallback se o método não estiver disponível
+        Alert.alert(
+          'Permissão necessária',
+          'Para exibir a bolha flutuante, você precisa permitir "Exibir sobre outros apps".\n\nVá em: Configurações > Apps > BeepCarMotorista > Exibir sobre outros apps',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            {
+              text: 'Abrir Configurações',
+              onPress: async () => {
+                try {
+                  await Linking.openSettings();
+                } catch (_err) {
+                  showUiMessage('Não foi possível abrir as configurações automaticamente.', 'error');
+                }
               },
             },
           ]
@@ -914,60 +286,112 @@ export default function MainScreen({ route }) {
       showUiMessage(`Erro ao checar permissão de overlay: ${e?.message || e}`, 'error');
       return false;
     }
-  };
+  }, [showUiMessage]);
 
-  const forceShowBubbleAndMinimize = async () => {
-    if (Platform.OS !== 'android') return;
+  const hideBubbleManually = async () => {
+    if (Platform.OS !== 'android') {
+      showUiMessage('Funcionalidade disponível apenas no Android', 'error');
+      return;
+    }
+    
     try {
-      if (!DriverForegroundService) {
-        showUiMessage('Erro: módulo DriverForegroundService não encontrado', 'error');
+      if (!DriverForegroundService?.hideBubble) {
+        showUiMessage('Erro: método hideBubble não disponível', 'error');
         return;
       }
 
-      const ok = await ensureOverlayPermission();
-      if (!ok) return;
+      console.log('🔴 Escondendo bolha...');
+      await DriverForegroundService.hideBubble();
+      showUiMessage('Bolha removida da tela', 'info');
+      console.log('✅ Bolha escondida com sucesso');
+    } catch (err) {
+      console.error('❌ Erro ao esconder bolha:', err);
+      showUiMessage(`Erro ao esconder bolha: ${err?.message || err}`, 'error');
+    }
+  };
 
-      if (DriverForegroundService?.startService) {
-        try {
-          showUiMessage('Iniciando serviço...', 'info');
-          await DriverForegroundService.startService(WS_CORRIDAS_URL);
-        } catch (e) {
-          showUiMessage(`Falha ao iniciar serviço: ${e?.message || e}`, 'error');
-          return;
-        }
-      } else {
+  const forceShowBubbleAndMinimize = async () => {
+    if (Platform.OS !== 'android') {
+      showUiMessage('Funcionalidade disponível apenas no Android', 'error');
+      return;
+    }
+    
+    try {
+      if (!DriverForegroundService) {
+        showUiMessage('Erro: módulo DriverForegroundService não encontrado. Recompile o app.', 'error');
+        console.error('DriverForegroundService não disponível');
+        return;
+      }
+
+      console.log('🔵 Iniciando processo de forçar bolha...');
+
+      // 1. Verificar e solicitar permissão de overlay
+      showUiMessage('Verificando permissões...', 'info');
+      const ok = await ensureOverlayPermission();
+      if (!ok) {
+        
+        return;
+      }
+      console.log('✅ Permissão de overlay concedida');
+
+      // 2. Iniciar o serviço primeiro
+      if (!DriverForegroundService?.startService) {
         showUiMessage('Erro: método startService não disponível', 'error');
         return;
       }
 
-      if (DriverForegroundService?.showBubble) {
-        try {
-          showUiMessage('Exibindo bolha...', 'info');
-          await DriverForegroundService.showBubble();
-        } catch (e) {
-          showUiMessage(`Falha ao exibir bolha: ${e?.message || e}`, 'error');
-          return;
-        }
-      } else {
+      try {
+        showUiMessage('Iniciando serviço em background...', 'info');
+        console.log('🔵 Iniciando serviço com URL:', WS_CORRIDAS_URL);
+        await DriverForegroundService.startService(WS_CORRIDAS_URL);
+        console.log('✅ Serviço iniciado');
+        
+        // Aguardar um pouco para o serviço inicializar
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (e) {
+        console.error('❌ Erro ao iniciar serviço:', e);
+        showUiMessage(`Falha ao iniciar serviço: ${e?.message || e}`, 'error');
+        return;
+      }
+
+      // 3. Mostrar a bolha
+      if (!DriverForegroundService?.showBubble) {
         showUiMessage('Erro: método showBubble não disponível', 'error');
         return;
       }
 
-      if (DriverForegroundService?.moveTaskToBack) {
-        try {
-          showUiMessage('Minimizando app...', 'info');
-          await DriverForegroundService.moveTaskToBack();
-        } catch (e) {
-          showUiMessage(`Falha ao minimizar app: ${e?.message || e}`, 'error');
-          return;
-        }
-      } else {
+      try {
+        await DriverForegroundService.showBubble();
+        console.log('✅ showBubble chamado com sucesso');
+        
+        // Aguardar um pouco para a bolha aparecer
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (e) {
+        console.error('❌ Erro ao exibir bolha:', e);
+        showUiMessage(`Falha ao exibir bolha: ${e?.message || e}. Verifique se a permissão foi concedida.`, 'error');
+        return;
+      }
+
+      // 4. Minimizar o app
+      if (!DriverForegroundService?.moveTaskToBack) {
         showUiMessage('Erro: método moveTaskToBack não disponível', 'error');
         return;
       }
 
-      showUiMessage('Bolha acionada. Se não aparecer, verifique otimização de bateria.', 'success');
+      try {
+        showUiMessage('Minimizando app...', 'info');
+        console.log('🔵 Minimizando app...');
+        await DriverForegroundService.moveTaskToBack();
+        console.log('✅ App minimizado');
+      } catch (e) {
+        console.error('❌ Erro ao minimizar app:', e);
+        showUiMessage(`Falha ao minimizar app: ${e?.message || e}`, 'error');
+        return;
+      }
+
+    
     } catch (e) {
+      console.error('❌ Erro geral ao forçar bolha:', e);
       showUiMessage(`Erro ao forçar bolha: ${e?.message || e}`, 'error');
     }
   };
@@ -975,32 +399,8 @@ export default function MainScreen({ route }) {
   const carregarSaldoDia = useCallback(async () => {
     if (!motoristaId) return;
     try {
-      const response = await fetch(`${API_BASE_URL}/api_ganhos.php`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          motorista_id: motoristaId,
-          periodo: 'diario',
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const totalRaw = String(data?.total ?? 'R$ 0,00');
-      const totalNumerico = parseFloat(
-        totalRaw
-          .replace('R$', '')
-          .trim()
-          .replace(/\./g, '')
-          .replace(',', '.')
-      );
-
-      setSaldoDia(Number.isFinite(totalNumerico) ? totalNumerico : 0);
+      const saldo = await carregarGanhos(motoristaId, 'diario');
+      setSaldoDia(saldo);
     } catch (e) {
       console.log('Erro ao carregar saldo do dia:', e);
       setSaldoDia(0);
@@ -1136,11 +536,13 @@ export default function MainScreen({ route }) {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     let mounted = true;
+    let wasActive = AppState.currentState === 'active'; // Rastreia se o app já estava ativo
 
     const sub = AppState.addEventListener('change', async (state) => {
       if (!mounted) return;
 
       if (state === 'active') {
+        wasActive = true; // Marca que o app já esteve ativo
         if (DriverForegroundService?.hideBubble) {
           try {
             await DriverForegroundService.hideBubble();
@@ -1148,6 +550,12 @@ export default function MainScreen({ route }) {
             showUiMessage(`Falha ao esconder bolha (ACTIVE): ${e?.message || e}`, 'error');
           }
         }
+        return;
+      }
+
+      // Só mostra a bolha se o app já esteve ativo antes (não no primeiro carregamento)
+      if (!wasActive) {
+        wasActive = true; // Marca para próxima vez
         return;
       }
 
@@ -1634,7 +1042,7 @@ export default function MainScreen({ route }) {
       removeCorridasHandler('sem_corridas');
       removeCorridasHandler('error');
     };
-  }, [motoristaId, online, tipoVeiculo, modalCorrida, temCorridaAtiva, navigation, addCorridasHandler, removeCorridasHandler, sendCorridas]);
+  }, [motoristaId, online, tipoVeiculo, modalCorrida, temCorridaAtiva, corridaAtual?.id, navigation, addCorridasHandler, removeCorridasHandler, sendCorridas, abrirModalCorrida, fecharModalCorrida, setCorridaAtual, setTemCorridaAtiva]);
 
   // Setup inicial do som
   useEffect(() => {
@@ -1803,42 +1211,42 @@ export default function MainScreen({ route }) {
     const loadMotoristaData = async () => {
       try {
         console.log('👤 Carregando dados do motorista...');
-        const idParam = route?.params?.user?.id || route?.params?.motoristaId;
-        const tipoVeiculoParam = route?.params?.user?.tipo_veiculo || route?.params?.tipo_veiculo;
+        const { setUser } = useAuthStore.getState();
         
-        let motoristaIdToUse = idParam;
-        let tipoVeiculoToUse = tipoVeiculoParam;
-
-        if (!motoristaIdToUse) {
+        // Primeiro tenta carregar do store (AsyncStorage)
+        const userData = await loadUser();
+        
+        // Se veio via params, atualiza o store
+        const userFromParams = route?.params?.user;
+        const motoristaIdFromParams = route?.params?.motoristaId;
+        
+        if (userFromParams) {
+          console.log('👤 Usuário recebido via params, atualizando store...');
+          setUser(userFromParams);
+        } else if (motoristaIdFromParams && !userData) {
+          // Se só tem motoristaId nos params, cria objeto mínimo
+          const minimalUser = {
+            id: motoristaIdFromParams,
+            motorista_id: motoristaIdFromParams,
+            tipo_veiculo: route?.params?.tipo_veiculo || '1',
+          };
+          setUser(minimalUser);
+        } else if (!userData) {
+          // Se não tem nada, tenta carregar do AsyncStorage diretamente (fallback)
           const stored = await AsyncStorage.getItem('user_data');
           if (stored) {
             const parsed = JSON.parse(stored);
-            motoristaIdToUse = parsed?.id || parsed?.motorista_id || parsed?.user_id;
-            if (!tipoVeiculoToUse) {
-              tipoVeiculoToUse = parsed?.tipo_veiculo || parsed?.tipo;
-            }
+            setUser(parsed);
           }
-        }
-
-        if (motoristaIdToUse) {
-          console.log('👤 Motorista ID carregado:', motoristaIdToUse);
-          setMotoristaId(motoristaIdToUse);
-        }
-        
-        const tipoFinal = tipoVeiculoToUse || '1';
-        if (tipoFinal !== tipoVeiculo) {
-          console.log('🚗 Tipo de veículo carregado:', tipoFinal);
-          setTipoVeiculo(tipoFinal);
         }
 
       } catch (e) {
         console.error('❌ Erro ao carregar dados do motorista:', e);
-        setTipoVeiculo('1');
       }
     };
     
     loadMotoristaData();
-  }, [route?.params]);
+  }, [route?.params, loadUser]);
 
   useEffect(() => {
     carregarSaldoDia();
@@ -2152,26 +1560,8 @@ export default function MainScreen({ route }) {
       return;
     }
     
-    let motoristaIdLocal = motoristaId;
-    
-    // Se motoristaId não estiver no estado, buscar do AsyncStorage
-    if (!motoristaIdLocal) {
-      try {
-        const stored = await AsyncStorage.getItem('user_data');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          motoristaIdLocal = parsed?.id || parsed?.motorista_id || parsed?.user_id;
-          if (motoristaIdLocal) {
-            console.log('🔑 Motorista ID recuperado do AsyncStorage:', motoristaIdLocal);
-            setMotoristaId(motoristaIdLocal);
-          }
-        }
-      } catch (error) {
-        console.error('❌ Erro ao buscar motorista ID:', error);
-      }
-    }
-    
-    if (!motoristaIdLocal) {
+    // Usar motoristaId do store
+    if (!motoristaId) {
       Alert.alert('Erro', 'Motorista não identificado. Por favor, faça login novamente.');
       return;
     }
@@ -2180,7 +1570,7 @@ export default function MainScreen({ route }) {
     
     console.log('✅ Dados para aceitar corrida:', {
       corrida_id: corridaId,
-      motorista_id: motoristaIdLocal,
+      motorista_id: motoristaId,
       api_url: API_ACAO_CORRIDA
     });
     
@@ -2189,27 +1579,14 @@ export default function MainScreen({ route }) {
       const wsSent = sendCorridas({
         type: 'aceitar_corrida',
         corrida_id: corridaId,
-        motorista_id: motoristaIdLocal,
+        motorista_id: motoristaId,
         timestamp: Date.now()
       });
       
       console.log('📤 Enviado para WebSocket:', wsSent);
       
       // Também chamar a API diretamente para garantir
-      const response = await fetch(API_ACAO_CORRIDA, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          corrida_id: corridaId,
-          motorista_id: motoristaIdLocal,
-          acao: 'aceitar'
-        })
-      });
-      
-      const data = await response.json();
+      const data = await aceitarCorrida(corridaId, motoristaId);
       console.log('📝 Resposta da API ao aceitar corrida:', data);
       
       if (data.success) {
@@ -2227,18 +1604,17 @@ export default function MainScreen({ route }) {
         
         // Navegar para tela de corrida
         navigation.navigate('Corrida', { 
-          corrida: corridaAtual,
-          motoristaId: motoristaIdLocal 
+          corrida: corridaAtual
         });
       } else {
         Alert.alert('Erro', data.message || 'Não foi possível aceitar a corrida');
         // Se falhar, fechar modal e resetar
         fecharModalCorrida();
         setTimeout(() => {
-          if (online && motoristaIdLocal) {
+          if (online && motoristaId) {
             sendCorridas({
               type: 'solicitar_corridas',
-              motorista_id: motoristaIdLocal,
+              motorista_id: motoristaId,
               timestamp: Date.now()
             });
           }
@@ -2261,25 +1637,8 @@ export default function MainScreen({ route }) {
       return;
     }
     
-    let motoristaIdLocal = motoristaId;
-    
-    if (!motoristaIdLocal) {
-      try {
-        const stored = await AsyncStorage.getItem('user_data');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          motoristaIdLocal = parsed?.id || parsed?.motorista_id || parsed?.user_id;
-          if (motoristaIdLocal) {
-            console.log('🔑 Motorista ID recuperado do AsyncStorage:', motoristaIdLocal);
-            setMotoristaId(motoristaIdLocal);
-          }
-        }
-      } catch (error) {
-        console.error('❌ Erro ao buscar motorista ID:', error);
-      }
-    }
-    
-    if (!motoristaIdLocal) {
+    // Usar motoristaId do store
+    if (!motoristaId) {
       console.log('⚠️ Motorista não identificado');
       return;
     }
@@ -2288,7 +1647,7 @@ export default function MainScreen({ route }) {
     
     console.log('❌ Dados para recusar corrida:', {
       corrida_id: corridaId,
-      motorista_id: motoristaIdLocal,
+      motorista_id: motoristaId,
       api_url: API_ACAO_CORRIDA
     });
     
@@ -2297,27 +1656,14 @@ export default function MainScreen({ route }) {
       const wsSent = sendCorridas({
         type: 'recusar_corrida',
         corrida_id: corridaId,
-        motorista_id: motoristaIdLocal,
+        motorista_id: motoristaId,
         timestamp: Date.now()
       });
       
       console.log('📤 Enviado para WebSocket:', wsSent);
       
       // Também chamar a API diretamente para garantir
-      const response = await fetch(API_ACAO_CORRIDA, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          corrida_id: corridaId,
-          motorista_id: motoristaIdLocal,
-          acao: 'recusar'
-        })
-      });
-      
-      const data = await response.json();
+      const data = await recusarCorrida(corridaId, motoristaId);
       console.log('📝 Resposta da API ao recusar corrida:', data);
       
       // Marcar como recusada
@@ -2339,10 +1685,10 @@ export default function MainScreen({ route }) {
       
       // Solicitar novas corridas após recusar
       setTimeout(() => {
-        if (online && motoristaIdLocal) {
+        if (online && motoristaId) {
           sendCorridas({
             type: 'solicitar_corridas',
-            motorista_id: motoristaIdLocal,
+            motorista_id: motoristaId,
             timestamp: Date.now()
           });
         }
@@ -2573,7 +1919,7 @@ export default function MainScreen({ route }) {
   };
 
   // Abrir modal de corrida
-  const abrirModalCorrida = async () => {
+  const abrirModalCorrida = useCallback(async () => {
     if (modalCorrida) {
       console.log('⚠️ Modal já está aberto');
       return;
@@ -2620,10 +1966,10 @@ export default function MainScreen({ route }) {
         });
       }, 1000);
     }
-  };
+  }, [modalCorrida, corridaAtual, motoristaId, online, sendCorridas, fecharModalCorrida, recusarCorridaAPI, slideAnim]);
 
   // Fechar modal de corrida
-  const fecharModalCorrida = () => {
+  const fecharModalCorrida = useCallback(() => {
     console.log('🔒 Fechando modal de corrida');
     
     if (timerIntervalRef.current) {
@@ -2649,68 +1995,8 @@ export default function MainScreen({ route }) {
         setCorridaAtual(null);
       }, 500);
     });
-  };
+  }, [setCorridaAtual, slideAnim]);
 
-  // Testar conexão WebSocket manualmente
-  const testarConexaoWebSocket = () => {
-    console.log('🧪 Testando conexões WebSocket:');
-    console.log('📍 Localização:', {
-      estado: wsLocalizacaoStatus,
-      conectado: wsLocalizacaoRef.current?.readyState === 1
-    });
-    console.log('🚗 Corridas:', {
-      estado: wsCorridasStatus,
-      conectado: wsCorridasRef.current?.readyState === 1
-    });
-    
-    Alert.alert(
-      'Status WebSocket',
-      `Localização: ${wsLocalizacaoStatus}\nCorridas: ${wsCorridasStatus}\nMotorista ID: ${motoristaId}\nOnline: ${online}`,
-      [{ text: 'OK' }]
-    );
-  };
-
-  // Simular corrida para teste
-  const simularCorridaTeste = () => {
-    const testCorrida = {
-      id: 'test_' + Date.now(),
-      ref: 'CR-TEST-' + Date.now(),
-      valor: 'R$ 15,50',
-      distancia: '2,5 km',
-      tempo: '8 min',
-      origem: { 
-        endereco: 'Rua Teste Origem, 123',
-        latitude: -5.195395088992599,
-        longitude: -39.280787173061384
-      },
-      destino: { 
-        endereco: 'Rua Teste Destino, 456',
-        latitude: -5.195395088992599,
-        longitude: -39.280787173061384
-      },
-      passageiro: { 
-        nome: 'Passageiro Teste',
-        telefone: '(85) 99999-9999'
-      },
-      metodo_pagamento: 'dinheiro',
-      servico: 'Beep Moto',
-      tipo_veiculo: 1,
-      api_acao_url: API_ACAO_CORRIDA
-    };
-    
-    console.log('🧪 Simulando corrida de teste:', testCorrida);
-    
-    // Simula recebimento via WebSocket
-    if (addCorridasHandler) {
-      addCorridasHandler('nova_corrida', {
-        type: 'nova_corrida',
-        corrida: testCorrida,
-        api_endpoint: API_ACAO_CORRIDA
-      });
-    }
-    
-    Alert.alert('Corrida de Teste', 'Uma corrida de teste foi simulada. Verifique o modal.');
-  };
 
   // Cleanup
   useEffect(() => {
@@ -2733,13 +2019,13 @@ export default function MainScreen({ route }) {
   }, []);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar 
         barStyle="dark-content" 
-        backgroundColor="transparent" 
-        translucent 
+        backgroundColor="#f8fafc" 
       />
 
+      {/* Snackbar */}
       {snackbarState.visible && (
         <View pointerEvents="none" style={styles.snackbarContainer}>
           <View
@@ -2922,12 +2208,20 @@ export default function MainScreen({ route }) {
         </View>
 
         {Platform.OS === 'android' && (
-          <TouchableOpacity
-            style={styles.forceBubbleButton}
-            onPress={forceShowBubbleAndMinimize}
-          >
-            <Text style={styles.forceBubbleButtonText}>FORÇAR BOLHA</Text>
-          </TouchableOpacity>
+          <View style={styles.bubbleButtonsContainer}>
+            <TouchableOpacity
+              style={[styles.forceBubbleButton, styles.forceBubbleButtonHalf]}
+              onPress={forceShowBubbleAndMinimize}
+            >
+              <Text style={styles.forceBubbleButtonText}>FORÇAR BOLHA</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.forceBubbleButton, styles.forceBubbleButtonHalf, styles.hideBubbleButton]}
+              onPress={hideBubbleManually}
+            >
+              <Text style={styles.forceBubbleButtonText}>ESCONDER BOLHA</Text>
+            </TouchableOpacity>
+          </View>
         )}
 
         {/* Status de busca */}
@@ -3145,7 +2439,7 @@ export default function MainScreen({ route }) {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -3323,19 +2617,33 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 35,
   },
+  bubbleButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 10,
+    gap: 10,
+    paddingHorizontal: 20,
+  },
   forceBubbleButton: {
     alignSelf: 'center',
-    marginTop: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: '#111827',
+  },
+  forceBubbleButtonHalf: {
+    flex: 1,
+    maxWidth: '48%',
+  },
+  hideBubbleButton: {
+    backgroundColor: '#FF3B30',
   },
   forceBubbleButtonText: {
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 12,
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
   websocketStatusContainer: {
     width: '100%',

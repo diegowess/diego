@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { useAuthStore } from '../store/useAuthStore';
 
 const { width, height } = Dimensions.get('window');
 
@@ -29,8 +30,9 @@ export default function LoginScreen({ navigation }) {
   useEffect(() => {
     const checkSavedSession = async () => {
       try {
-        const storedUser = await AsyncStorage.getItem('user_data');
-        if (storedUser) {
+        const { loadUser, isAuthenticated } = useAuthStore.getState();
+        const user = await loadUser();
+        if (user || isAuthenticated) {
           navigation.replace('Inicio');
         }
       } catch (e) {
@@ -83,13 +85,14 @@ export default function LoginScreen({ navigation }) {
       if (data.success) {
         // Login bem-sucedido
         Alert.alert('Sucesso', 'Login realizado com sucesso!');
-        // Salvar sessão para não precisar logar novamente
+        // Salvar sessão usando Zustand store
         try {
           const rawUser = data.user ? data.user : { cpf: cpfNumerico };
           // Normalizar a estrutura para sempre conter um campo 'id' do motorista
           const normalizedId = rawUser?.id ?? rawUser?.motorista_id ?? rawUser?.user_id ?? null;
           const userPayload = normalizedId ? { ...rawUser, id: normalizedId } : rawUser;
-          await AsyncStorage.setItem('user_data', JSON.stringify(userPayload));
+          // Salvar no store (automaticamente persiste no AsyncStorage)
+          useAuthStore.getState().setUser(userPayload);
           await AsyncStorage.setItem('login_credentials', JSON.stringify({ cpf: cpfNumerico, senha }));
         } catch (e) {
           console.log('Falha ao salvar sessão:', e);

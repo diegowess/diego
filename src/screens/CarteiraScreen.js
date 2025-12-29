@@ -1,19 +1,19 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Dimensions,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { useAuthStore } from '../store/useAuthStore';
 
 const { width } = Dimensions.get('window');
 
@@ -21,32 +21,25 @@ const API_BASE_URL = 'https://beepapps.cloud/appmotorista';
 
 export default function CarteiraScreen({ route }) {
   const navigation = useNavigation();
+  const { motoristaId, loadUser } = useAuthStore();
   const [saldo, setSaldo] = useState(0);
   const [historicoSaques, setHistoricoSaques] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [modalSaqueVisible, setModalSaqueVisible] = useState(false);
   const [valorSaque, setValorSaque] = useState('');
   const [solicitandoSaque, setSolicitandoSaque] = useState(false);
-  const [motoristaId, setMotoristaId] = useState(route.params?.motoristaId || null);
 
   useEffect(() => {
-    carregarDadosCarteira();
-  }, [motoristaId]);
-
-  useEffect(() => {
-    const resolveId = async () => {
-      if (motoristaId) return;
-      try {
-        const stored = await AsyncStorage.getItem('user_data');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          const id = parsed?.id || parsed?.motorista_id || parsed?.user_id;
-          if (id) setMotoristaId(id);
-        }
-      } catch {}
+    const init = async () => {
+      if (!motoristaId) {
+        await loadUser();
+      }
+      if (motoristaId) {
+        carregarDadosCarteira();
+      }
     };
-    resolveId();
-  }, [motoristaId]);
+    init();
+  }, [motoristaId, loadUser]);
 
   const carregarDadosCarteira = async () => {
     if (!motoristaId) {

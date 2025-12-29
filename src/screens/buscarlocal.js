@@ -1,11 +1,10 @@
 // src/screens/buscarlocal.js
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Location from 'expo-location';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const GOOGLE_API_KEY = "AIzaSyCqogzkL4dzoy_PEbVyAOoc_bdR2BrzWeU";
 
@@ -26,14 +26,9 @@ const BuscarLocalScreen = () => {
   const [userLocation, setUserLocation] = useState(null);
   const [currentCity, setCurrentCity] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(true);
 
-  // Obter localização do usuário ao carregar a tela
-  useEffect(() => {
-    getUserLocation();
-  }, []);
-
-  const getUserLocation = async () => {
+  // Obter localização do usuário
+  const getUserLocation = useCallback(async () => {
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
@@ -49,10 +44,13 @@ const BuscarLocalScreen = () => {
       }
     } catch (error) {
       console.log('Erro ao obter localização:', error);
-    } finally {
-      setIsLoadingLocation(false);
     }
-  };
+  }, []);
+
+  // Obter localização do usuário ao carregar a tela
+  useEffect(() => {
+    getUserLocation();
+  }, [getUserLocation]);
 
   // Função para obter nome da cidade usando reverse geocoding
   const getCityName = async (lat, lng) => {

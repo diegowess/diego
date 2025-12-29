@@ -2,22 +2,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    NativeModules,
-    RefreshControl,
-    Platform as RNPlatform,
-    SafeAreaView,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  NativeModules,
+  RefreshControl,
+  Platform as RNPlatform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
 // Chaves para armazenamento
@@ -381,8 +381,8 @@ const PerfilScreen = ({ navigation, route }) => {
 
   if (isLoading && !refreshing) {
     return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#000" />
           <Text style={styles.loadingText}>Carregando perfil...</Text>
@@ -393,8 +393,8 @@ const PerfilScreen = ({ navigation, route }) => {
 
   if (!user) {
     return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar  backgroundColor="#000" showHideTransition={true} />
         <View style={styles.errorContainer}>
           <Icon name="error-outline" size={60} color="#666" />
           <Text style={styles.errorText}>Usuário não encontrado</Text>
@@ -410,8 +410,8 @@ const PerfilScreen = ({ navigation, route }) => {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
       
       {/* Header */}
       <View style={styles.header}>

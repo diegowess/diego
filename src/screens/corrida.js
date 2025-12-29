@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
@@ -7,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -17,15 +15,20 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { useAppStore } from '../store/useAppStore';
+import { useAuthStore } from '../store/useAuthStore';
 
-  const { width, height } = Dimensions.get('window');
   const API_BASE_URL = 'https://beepapps.cloud/appmotorista';
 
   export default function CorridaScreen({ route, navigation }) {
     const mapRef = useRef(null);
 
-    const [motoristaId, setMotoristaId] = useState(route?.params?.motoristaId || null);
-    const [corrida, setCorrida] = useState(route?.params?.corrida || null);
+    // Usar stores
+    const { motoristaId, loadUser } = useAuthStore();
+    const { corridaAtual } = useAppStore();
+    
+    // Usar corrida do store ou route params
+    const [corrida, setCorrida] = useState(route?.params?.corrida || corridaAtual || null);
     const [passageiroIdPersist, setPassageiroIdPersist] = useState(null);
     const [loading, setLoading] = useState(false);
     const [cancelling, setCancelling] = useState(false);
@@ -61,13 +64,9 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 
     useEffect(() => {
       const init = async () => {
+        // Carregar usuário do store se não estiver disponível
         if (!motoristaId) {
-          const stored = await AsyncStorage.getItem('user_data');
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            const id = parsed?.id || parsed?.motorista_id || parsed?.user_id;
-            if (id) setMotoristaId(id);
-          }
+          await loadUser();
         }
         try {
           const { status } = await Location.requestForegroundPermissionsAsync();
@@ -79,7 +78,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
         } catch {}
       };
       init();
-    }, []);
+    }, [motoristaId, loadUser]);
 
     useEffect(() => {
       const fetchCorridaAtiva = async () => {
@@ -809,7 +808,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
                 ))}
               </View>
               
-              <Text style={styles.ratingText}>
+              <Text style={styles.ratingTextModal}>
                 {avaliacaoNota === 0 ? 'Selecione uma nota' : `${avaliacaoNota} estrela${avaliacaoNota !== 1 ? 's' : ''}`}
               </Text>
               
@@ -1173,7 +1172,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
     starButton: {
       padding: 10,
     },
-    ratingText: {
+    ratingTextModal: {
       fontSize: 16,
       color: '#ccc',
       marginBottom: 16,
